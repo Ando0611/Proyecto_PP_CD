@@ -1,32 +1,44 @@
 """
-Aplicación de escritorio construida con Tkinter. 
-Responsabilidad : Capturar la operación que pude el usuario, 
-enviarla al middleware, mostrar los resultados que van llegando y 
-persistir localmente tanto las solicitudes hechas como los resultados recibidos.
+Cliente pesado (GUI) - Calculadora Distribuida (Cómputo Distribuido, Proyecto Primer Parcial)
+
+Aplicación de escritorio construida con Tkinter (no es un navegador).
+Responsabilidad: capturar la operación que pide el usuario, enviarla al
+middleware, mostrar los resultados que van llegando (broadcast desde todos
+los servidores conectados, para todos los clientes conectados) y persistir
+localmente tanto las solicitudes hechas como los resultados recibidos.
+
+No contiene lógica de negocio: nunca calcula la operación, solo la solicita
+y muestra lo que el servidor respondió.
+
+Uso:
+    python client.py --id C1 --host 127.0.0.1 --port 5000
+    python client.py --id C2 --host 127.0.0.1 --port 5000
 """
 
 import argparse
-import os 
+import os
 import queue
 import socket
 import sqlite3
-import sys 
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from common.protocol import MessageChannel, make_register, make_request, now_iso
+from common.protocol import MessageChannel, make_register, make_request, now_iso  # noqa: E402
 
 DB_DIR = os.path.join(os.path.dirname(__file__), "data")
 
-# ------------------------------------------------
-# Persistenia local del cliente
-# ------------------------------------------------
 
+# ---------------------------------------------------------------------- #
+# Persistencia local del cliente
+# ---------------------------------------------------------------------- #
 class ClientStore:
     """
-    Persiste tanto las operaciones solicitadas por este cliente como los resultados recibidos.
+    Persiste tanto las operaciones solicitadas por este cliente como los
+    resultados recibidos (de cualquier servidor, para cualquier cliente,
+    ya que el middleware distribuye los resultados a todos).
     """
 
     def __init__(self, client_id: str):
@@ -37,43 +49,42 @@ class ClientStore:
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS requests (
-            request_id TEXT PRIMARY KEY,
-            client_id TEXT NOT NULL,
-            op TEXT NOT NULL,
-            a REAL NOT NULL,
-            b REAL NOT NULL,
-            timestamp TEXT NOT NULL,
-            own INTEGER NOT NULL DEFAULT 1
-            )           
+                request_id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                op TEXT NOT NULL,
+                a REAL NOT NULL,
+                b REAL NOT NULL,
+                timestamp TEXT NOT NULL,
+                own INTEGER NOT NULL DEFAULT 1
+            )
             """
         )
-        self._conn.execute (
+        self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            request_id TEXT NOT NULL,
-            client_id TEXT NOT NULL,
-            server_id TEXT NOT NULL,
-            op TEXT NOT NULL,
-            a REAL NOT NULL,
-            b REAL NOT NULL,
-            result REAL,
-            status TEXT NOT NULL,
-            error TEXT,
-            timestamp TEXT NOT NULL
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id TEXT NOT NULL,
+                client_id TEXT NOT NULL,
+                server_id TEXT NOT NULL,
+                op TEXT NOT NULL,
+                a REAL NOT NULL,
+                b REAL NOT NULL,
+                result REAL,
+                status TEXT NOT NULL,
+                error TEXT,
+                timestamp TEXT NOT NULL
             )
             """
         )
         self._conn.commit()
 
-    def save_request(self, request_id, client_id, op, a, b,timestamp, own=True):
+    def save_request(self, request_id, client_id, op, a, b, timestamp, own=True):
         with self._lock:
             self._conn.execute(
                 """
-                INSERT OR IGNORE INTO requests (request_id, client_id, op, a, b, 
-                    timestamp, own)
+                INSERT OR IGNORE INTO requests (request_id, client_id, op, a, b, timestamp, own)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, 
+                """,
                 (request_id, client_id, op, a, b, timestamp, 1 if own else 0),
             )
             self._conn.commit()
@@ -84,8 +95,8 @@ class ClientStore:
                 """
                 INSERT INTO results
                     (request_id, client_id, server_id, op, a, b, result, status, error, timestamp)
-                VALUES (?, ?, ? , ? , ?, ?, ?, ?, ?, ?)
-                """, 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
                 (request_id, client_id, server_id, op, a, b, result, status, error, timestamp),
             )
             self._conn.commit()
@@ -94,28 +105,28 @@ class ClientStore:
         with self._lock:
             cur = self._conn.execute(
                 """
-                SELECT r.timestamp, r.request_id, r.client_id, r.server_id, r.op, r.a, r.b, r.result, r.status, r.error
+                SELECT r.timestamp, r.request_id, r.client_id, r.server_id, r.op, r.a, r.b,
+                       r.result, r.status, r.error
                 FROM results r
                 ORDER BY r.id DESC
                 LIMIT ?
-                """
+                """,
                 (limit,),
             )
             return cur.fetchall()
-        
 
-# -------------------------------------------------------
-# Comunicación de red usando un hilo aparte.
-# -------------------------------------------------------
 
+# ---------------------------------------------------------------------- #
+# Comunicación de red (hilo aparte de la GUI)
+# ---------------------------------------------------------------------- #
 class NetworkClient:
     """
     Maneja la conexión socket con el middleware en un hilo propio y coloca
-    los mensajes recibidios en una cola para que la GUI los procese
+    los mensajes recibidos en una cola (queue) para que la GUI los procese
     de forma segura con root.after().
     """
 
-    def __init__(self, client_id: str, host:str, port:int, inbox: queue.Queue):
+    def __init__(self, client_id: str, host: str, port: int, inbox: queue.Queue):
         self.client_id = client_id
         self.host = host
         self.port = port
@@ -127,7 +138,7 @@ class NetworkClient:
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        try: 
+        try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((self.host, self.port))
             self.channel = MessageChannel(sock)
@@ -136,7 +147,8 @@ class NetworkClient:
             self.inbox.put({"_local": "connected"})
             for msg in self.channel.recv():
                 self.inbox.put(msg)
-        except OSError as exc:        
+            self.inbox.put({"_local": "disconnected"})
+        except OSError as exc:
             self.inbox.put({"_local": "error", "message": str(exc)})
 
     def send_request(self, req: dict):
@@ -145,14 +157,13 @@ class NetworkClient:
         self.channel.send(req)
 
 
-# ------------------------------
+# ---------------------------------------------------------------------- #
 # Interfaz gráfica
-# ------------------------------
-
+# ---------------------------------------------------------------------- #
 class ClientApp(tk.Tk):
     OPS = ["+", "-", "*", "/"]
 
-    def __init__(self, client_id: str, host:str, port:int):
+    def __init__(self, client_id: str, host: str, port: int):
         super().__init__()
         self.client_id = client_id
         self.title(f"Calculadora Distribuida - Cliente {client_id}")
@@ -169,9 +180,8 @@ class ClientApp(tk.Tk):
         self.net.start()
         self.after(100, self._poll_inbox)
 
-    # ------------------------------------------------------------------------ #
-
-    def _build_widget(self, host, port):
+    # ------------------------------------------------------------------ #
+    def _build_widgets(self, host, port):
         top = ttk.Frame(self, padding=10)
         top.pack(fill="x")
 
@@ -336,5 +346,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    

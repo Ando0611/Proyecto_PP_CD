@@ -86,31 +86,31 @@ terminales en total).
 **Terminal 1 — Middleware:**
 
 ```bash
-python middleware/middleware.py --host 0.0.0.0 --port 5000
+python middleware/middleware.py --host 0.0.0.0 --port 5001
 ```
 
 **Terminal 2 — Servidor 1:**
 
 ```bash
-python server/server.py --id S1 --host 127.0.0.1 --port 5000
+python server/server.py --id S1 --host 127.0.0.1 --port 5001
 ```
 
 **Terminal 3 — Servidor 2:**
 
 ```bash
-python server/server.py --id S2 --host 127.0.0.1 --port 5000
+python server/server.py --id S2 --host 127.0.0.1 --port 5001
 ```
 
 **Terminal 4 — Cliente 1 (GUI):**
 
 ```bash
-python client/client.py --id C1 --host 127.0.0.1 --port 5000
+python client/client.py --id C1 --host 127.0.0.1 --port 5001
 ```
 
 **Terminal 5 — Cliente 2 (GUI):**
 
 ```bash
-python client/client.py --id C2 --host 127.0.0.1 --port 5000
+python client/client.py --id C2 --host 127.0.0.1 --port 5001
 ```
 
 Para correr los componentes en máquinas distintas de la misma red, usa la IP

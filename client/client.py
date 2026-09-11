@@ -22,8 +22,12 @@ import socket
 import sqlite3
 import sys
 import threading
-import tkinter as tk
-from tkinter import messagebox, ttk
+
+# Silencia el aviso de Tk obsoleto en el Python del sistema en macOS.
+os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
+
+import tkinter as tk  # noqa: E402
+from tkinter import messagebox, ttk  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from common.protocol import MessageChannel, make_register, make_request, now_iso  # noqa: E402

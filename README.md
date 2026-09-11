@@ -77,6 +77,18 @@ sqlite3 client/data/client_C1.db "SELECT * FROM results;"
 - No se requieren dependencias externas (solo librería estándar: `socket`,
   `sqlite3`, `tkinter`, `json`, `threading`).
 
+> **macOS:** el Python del sistema trae un Tk 8.5 obsoleto que, en versiones
+> recientes de macOS, abre la ventana del cliente en negro/vacía hasta que se
+> mueve o redimensiona. Instala un Tk moderno con Homebrew y usa ese
+> intérprete para el cliente:
+>
+> ```bash
+> brew install python-tk
+> ```
+>
+> Luego corre `client/client.py` con `python3.14` (ver sección 4) en vez de
+> `python3`.
+
 ## 4. Cómo ejecutar la demostración completa
 
 Abre una terminal por cada componente (para la evidencia mínima se piden al
@@ -86,32 +98,35 @@ terminales en total).
 **Terminal 1 — Middleware:**
 
 ```bash
-python middleware/middleware.py --host 0.0.0.0 --port 5001
+python3 middleware/middleware.py --host 0.0.0.0 --port 5001
 ```
 
 **Terminal 2 — Servidor 1:**
 
 ```bash
-python server/server.py --id S1 --host 127.0.0.1 --port 5001
+python3 server/server.py --id S1 --host 127.0.0.1 --port 5001
 ```
 
 **Terminal 3 — Servidor 2:**
 
 ```bash
-python server/server.py --id S2 --host 127.0.0.1 --port 5001
+python3 server/server.py --id S2 --host 127.0.0.1 --port 5001
 ```
 
 **Terminal 4 — Cliente 1 (GUI):**
 
 ```bash
-python client/client.py --id C1 --host 127.0.0.1 --port 5001
+python3.14 client/client.py --id C1 --host 127.0.0.1 --port 5001
 ```
 
 **Terminal 5 — Cliente 2 (GUI):**
 
 ```bash
-python client/client.py --id C2 --host 127.0.0.1 --port 5001
+python3.14 client/client.py --id C2 --host 127.0.0.1 --port 5001
 ```
+
+> En Windows/Linux, o si no instalaste `python-tk` en macOS, usa `python3`
+> en lugar de `python3.14`.
 
 Para correr los componentes en máquinas distintas de la misma red, usa la IP
 real de la máquina donde corre el middleware en `--host` (y abre el puerto

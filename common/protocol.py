@@ -1,182 +1,92 @@
 """
-Protocolo de mensajería para la Calculadora Distribuida.
+Protocolo de mensajes de la Calculadora Distribuida (arquitectura ADS).
 
-Arquitectura cliente / middleware / servidor de tres capas.
-Todas las conexiones son TCP sockets. Cada mensaje es un objeto JSON
-serializado en una sola línea, terminado con '\n' (newline-delimited JSON).
-Esto evita el problema de "framing" de TCP (los mensajes pueden llegar
-fragmentados o concatenados).
+Todas las conexiones son sockets TCP. Cada mensaje es un objeto JSON en una
+sola línea, terminado con '\n'.
 
-Tipos de mensaje:
+1) Mensaje de conexión (lo primero que se envía al conectarse a un nodo):
+   {"tipo": "conexion", "entidad": "nodo" | "gui" | "servidor", "id": "N1"}
 
-1) REGISTER  (cliente/servidor -> middleware)
+   El nodo contesta con su propia identificación:
+   {"tipo": "conexion_ok", "entidad": "nodo", "id": "N2"}
+
+2) Solicitud (GUI -> Campo de Datos):
    {
-     "type": "register",
-     "role": "client" | "server",
-     "id": "C1"            # identificador propio, elegido por el proceso
+     "id": "uuid",              # identificador único del mensaje
+     "codigo": "SUM_REQ",       # Código de Contenido
+     "a": 5.0, "b": 3.0,        # operandos
+     "origen": "GUI-1a2b"       # célula que originó el mensaje
    }
 
-2) REGISTER_OK (middleware -> cliente/servidor)
+3) Respuesta (célula servidor -> Campo de Datos):
    {
-     "type": "register_ok",
-     "id": "C1",
-     "role": "client"
-   }
-
-3) REQUEST  (cliente -> middleware -> todos los servidores)
-   {
-     "type": "request",
-     "request_id": "uuid",
-     "client_id": "C1",
-     "op": "+", "-", "*", "/",
-     "a": 5.0,
-     "b": 3.0,
-     "timestamp": "2026-08-31T12:00:00"
-   }
-
-4) RESULT   (servidor -> middleware -> todos los clientes)
-   {
-     "type": "result",
-     "request_id": "uuid",
-     "client_id": "C1",       # cliente que originó la solicitud
-     "server_id": "S1",       # servidor que la procesó
-     "op": "+",
-     "a": 5.0,
-     "b": 3.0,
-     "result": 8.0,           # null si status == "error"
-     "status": "ok" | "error",
-     "error": null | "mensaje de error",
-     "timestamp": "2026-08-31T12:00:01"
-   }
-
-5) INFO / LOG (middleware -> todos, opcional, solo informativo)
-   {
-     "type": "info",
-     "message": "..."
+     "id": "uuid",              # identificador propio de la respuesta
+     "id_solicitud": "uuid",    # identificador de la solicitud original
+     "codigo": "SUM_RES",       # Código de Contenido
+     "resultado": 8.0,
+     "origen": "SUM-3c4d"       # célula que originó el mensaje
    }
 """
 
 import json
-import socket
-import threading
 import uuid
-from datetime import datetime, timezone
 
-ENCODING = "utf-8"
-OPERATIONS = ("+", "-", "*", "/")
-
-
-def now_iso() -> str:
-    """Marca de tiempo ISO-8601 en UTC, legible y ordenable."""
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+# operación -> servicio (prefijo del Código de Contenido)
+SERVICIOS = {"+": "SUM", "-": "SUB", "*": "MUL", "/": "DIV"}
 
 
-def new_request_id() -> str:
+def nuevo_id() -> str:
     return str(uuid.uuid4())
 
 
-def make_register(role: str, node_id: str) -> dict:
-    assert role in ("client", "server")
-    return {"type": "register", "role": role, "id": node_id}
+def make_conexion(entidad: str, entidad_id: str, tipo: str = "conexion") -> dict:
+    return {"tipo": tipo, "entidad": entidad, "id": entidad_id}
 
 
-def make_register_ok(node_id: str, role: str) -> dict:
-    return {"type": "register_ok", "id": node_id, "role": role}
-
-
-def make_request(client_id: str, op: str, a: float, b: float, request_id: str = None) -> dict:
-    assert op in OPERATIONS
+def make_solicitud(origen: str, op: str, a: float, b: float) -> dict:
     return {
-        "type": "request",
-        "request_id": request_id or new_request_id(),
-        "client_id": client_id,
-        "op": op,
+        "id": nuevo_id(),
+        "codigo": SERVICIOS[op] + "_REQ",
         "a": a,
         "b": b,
-        "timestamp": now_iso(),
+        "origen": origen,
     }
 
 
-def make_result(request_id: str, client_id: str, server_id: str, op: str, a: float, b: float,
-                 result=None, status: str = "ok", error: str = None) -> dict:
+def make_respuesta(origen: str, solicitud: dict, resultado) -> dict:
     return {
-        "type": "result",
-        "request_id": request_id,
-        "client_id": client_id,
-        "server_id": server_id,
-        "op": op,
-        "a": a,
-        "b": b,
-        "result": result,
-        "status": status,
-        "error": error,
-        "timestamp": now_iso(),
+        "id": nuevo_id(),
+        "id_solicitud": solicitud["id"],
+        "codigo": solicitud["codigo"].replace("_REQ", "_RES"),
+        "resultado": resultado,
+        "origen": origen,
     }
 
 
-def make_info(message: str) -> dict:
-    return {"type": "info", "message": message}
-
-
-def compute(op: str, a: float, b: float):
-    """Ejecuta la operación aritmética. Lanza ZeroDivisionError o ValueError."""
-    if op == "+":
+def compute(servicio: str, a: float, b: float):
+    """Ejecuta la operación aritmética del servicio indicado."""
+    if servicio == "SUM":
         return a + b
-    if op == "-":
+    if servicio == "SUB":
         return a - b
-    if op == "*":
+    if servicio == "MUL":
         return a * b
-    if op == "/":
-        if b == 0:
-            raise ZeroDivisionError("División entre cero no permitida")
-        return a / b
-    raise ValueError(f"Operación no soportada: {op}")
+    if b == 0:
+        return "Error: división entre cero"
+    return a / b
 
 
-class MessageChannel:
-    """
-    Envuelve un socket TCP y ofrece envío/recepción de mensajes JSON
-    delimitados por saltos de línea, de forma segura entre hilos para el
-    envío (un lock por canal).
-    """
+def enviar(sock, msg: dict) -> None:
+    sock.sendall((json.dumps(msg) + "\n").encode("utf-8"))
 
-    def __init__(self, sock: socket.socket):
-        self.sock = sock
-        self._send_lock = threading.Lock()
-        self._recv_buffer = b""
 
-    def send(self, obj: dict) -> None:
-        data = (json.dumps(obj, ensure_ascii=False) + "\n").encode(ENCODING)
-        with self._send_lock:
-            self.sock.sendall(data)
+def recibir(sock):
+    """Generador que produce los mensajes JSON que van llegando por el socket."""
+    for linea in sock.makefile("r", encoding="utf-8"):
+        yield json.loads(linea)
 
-    def recv(self):
-        """
-        Generador que produce diccionarios JSON conforme van llegando
-        mensajes completos (terminados en '\n') por el socket.
-        Termina (StopIteration) cuando la conexión se cierra.
-        """
-        while True:
-            while b"\n" not in self._recv_buffer:
-                chunk = self.sock.recv(4096)
-                if not chunk:
-                    return  # conexión cerrada
-                self._recv_buffer += chunk
-            line, self._recv_buffer = self._recv_buffer.split(b"\n", 1)
-            if not line.strip():
-                continue
-            try:
-                yield json.loads(line.decode(ENCODING))
-            except json.JSONDecodeError:
-                # Mensaje corrupto: se ignora y se continúa escuchando.
-                continue
 
-    def close(self):
-        try:
-            self.sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        try:
-            self.sock.close()
-        except OSError:
-            pass
+def parse_direccion(texto: str):
+    """Convierte 'host:puerto' en (host, puerto)."""
+    host, puerto = texto.split(":")
+    return host, int(puerto)

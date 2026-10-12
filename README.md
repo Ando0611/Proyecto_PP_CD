@@ -1,196 +1,158 @@
-# Calculadora Distribuida — Cómputo Distribuido, Proyecto Primer Parcial
+# Calculadora Distribuida — Cómputo Distribuido, Proyecto Segundo Parcial
 
-Aplicación distribuida cliente/servidor de **tres capas** (cliente pesado,
-middleware, servidor) que implementa las cuatro operaciones aritméticas
-básicas (suma, resta, multiplicación, división) usando **sockets TCP** como
-mecanismo de comunicación.
+Adecuación de la calculadora del primer parcial a una **arquitectura ADS**:
+un Campo de Datos formado por nodos en malla completa, células GUI y células
+servidor, comunicación por **broadcast** y **Códigos de Contenido**.
+Conserva las cuatro operaciones (suma, resta, multiplicación, división) y
+usa **sockets TCP**.
 
-## 1. Arquitectura
+## 1. Programas
 
+- **Nodo del Campo de Datos** (`node/node.py`): forma la malla con los otros
+  nodos, acepta conexiones de células y de nodos, y retransmite por
+  broadcast todo mensaje que recibe. No calcula nada.
+- **Célula servidor** (`server/server.py`): se configura con `--servicio`
+  para atender una sola operación (`SUM`, `SUB`, `MUL` o `DIV`).
+- **Célula cliente GUI** (`client/client.py`): interfaz Tkinter que captura
+  los operandos y la operación, genera la solicitud y muestra la respuesta.
+
+El mismo programa se usa para cualquier número de instancias; nada depende
+de que sean cuatro nodos ni de un nodo central.
+
+## 2. Protocolo de conexión
+
+Todas las conexiones son sockets TCP con mensajes JSON de una línea.
+
+- Lo primero que envía quien se conecta a un nodo es:
+  `{"tipo": "conexion", "entidad": "nodo" | "gui" | "servidor", "id": "..."}`
+- El nodo contesta `{"tipo": "conexion_ok", "entidad": "nodo", "id": "N1"}`.
+- Cada nodo guarda sus conexiones activas (con el tipo de entidad y su id) y
+  las imprime al conectarse o desconectarse alguien.
+- La malla se forma con `--vecinos`: cada nodo nuevo se conecta a los nodos
+  que ya están iniciados.
+
+## 3. Mensajes y Códigos de Contenido
+
+| Operación      | Código solicitud | Código respuesta |
+|----------------|------------------|------------------|
+| Suma           | `SUM_REQ`        | `SUM_RES`        |
+| Resta          | `SUB_REQ`        | `SUB_RES`        |
+| Multiplicación | `MUL_REQ`        | `MUL_RES`        |
+| División       | `DIV_REQ`        | `DIV_RES`        |
+
+Solicitud:
+
+```json
+{"id": "uuid", "codigo": "SUM_REQ", "a": 5.0, "b": 3.0, "origen": "GUI-1a2b"}
 ```
- Cliente 1 (GUI) ──┐                              ┌── Servidor 1
-                    │                              │
- Cliente 2 (GUI) ───┼──── sockets ── MIDDLEWARE ───┼── Servidor 2
-                    │      (TCP)                   │
- Cliente N (GUI) ──┘                              └── Servidor N
+
+Respuesta (mensaje nuevo, con id propio y referencia a la solicitud):
+
+```json
+{"id": "uuid", "id_solicitud": "uuid", "codigo": "SUM_RES", "resultado": 8.0, "origen": "SUM-3c4d"}
 ```
 
-- **Cliente pesado** (`client/client.py`): aplicación de escritorio hecha con
-  Tkinter (no es un navegador). Permite capturar una operación (A, operador,
-  B), enviarla al middleware y ver los resultados que van llegando. No
-  contiene lógica de negocio: nunca calcula la operación.
-- **Middleware** (`middleware/middleware.py`): recibe conexiones de clientes
-  y servidores por el mismo puerto TCP. El primer mensaje de cada conexión
-  (`REGISTER`) le indica su rol, y así distingue conexiones de clientes de
-  conexiones de servidores. Reenvía cada `REQUEST` de un cliente a **todos**
-  los servidores conectados, y cada `RESULT` de un servidor a **todos** los
-  clientes conectados. No tiene lógica de negocio ni persistencia propia.
-- **Servidor** (`server/server.py`): recibe las solicitudes reenviadas por el
-  middleware, calcula la operación, **persiste el resultado en SQLite**
-  (`server/data/server_<id>.db`) y envía el resultado de vuelta al
-  middleware.
+## 4. Broadcast, ciclos y duplicados
 
-El protocolo de mensajes (JSON delimitado por saltos de línea sobre TCP) está
-documentado en `common/protocol.py`.
+- **Broadcast:** el nodo reenvía cada mensaje a todas sus conexiones (nodos
+  y células) excepto a aquella por la que llegó.
+- **Prevención de ciclos:** cada nodo guarda temporalmente los ids de los
+  mensajes ya procesados (los últimos 1000). Si el mismo id llega otra vez,
+  se descarta y no se retransmite.
+- **Respuestas duplicadas:** como hay una célula servidor de cada operación
+  en cada nodo, todas calculan la solicitud. Cada nodo guarda el id de las
+  solicitudes que ya tienen respuesta y solo retransmite la **primera**
+  respuesta de cada solicitud; las demás se descartan. Así cada GUI recibe
+  una sola respuesta, y si una célula servidor falla responde otra.
+- **Asociación solicitud-respuesta:** la GUI guarda el id de sus solicitudes
+  y solo muestra la respuesta cuyo `id_solicitud` coincide.
 
-### Flujo obligatorio implementado
+## 5. Requisitos
 
-1. Un cliente genera una solicitud de operación aritmética.
-2. El cliente la envía al middleware.
-3. El middleware la reenvía a **todos** los servidores conectados.
-4. Cada servidor procesa la operación.
-5. Cada servidor envía su resultado al middleware.
-6. El middleware reenvía **cada resultado recibido** a **todos** los
-   clientes conectados (no solo al que originó la solicitud).
-7. Cada cliente registra (persiste) la operación solicitada y los resultados
-   recibidos.
+- Python 3.9 o superior con Tkinter. Solo se usa la librería estándar.
+- En macOS, si la ventana sale en negro, instalar Tk con
+  `brew install python-tk`.
 
-Esto significa que, con 2 servidores conectados, cada solicitud produce 2
-resultados (uno por servidor), y ambos resultados llegan a todos los
-clientes conectados — así se demuestra en el video la redistribución del
-middleware.
+## 6. Cómo ejecutar la demostración
 
-## 2. Persistencia
+Todo se corre desde la carpeta del proyecto, en este orden: nodos, células
+servidor y al final las GUI.
 
-- **Servidor**: base SQLite `server/data/server_<id>.db`, tabla `results`
-  con cada operación que procesó (request_id, cliente origen, operación,
-  operandos, resultado, estado, error si aplica, timestamp).
-- **Cliente**: base SQLite `client/data/client_<id>.db` con dos tablas:
-  - `requests`: las operaciones que este cliente solicitó.
-  - `results`: todos los resultados que este cliente recibió (de cualquier
-    servidor, incluyendo solicitudes de otros clientes, ya que el
-    middleware los distribuye a todos).
+### 6.1 Los 4 nodos (una terminal por nodo, en este orden)
 
-Puedes inspeccionar cualquier base con, por ejemplo:
+El orden importa: cada nodo se conecta a los que ya están corriendo.
 
 ```bash
-sqlite3 server/data/server_S1.db "SELECT * FROM results;"
-sqlite3 client/data/client_C1.db "SELECT * FROM requests;"
-sqlite3 client/data/client_C1.db "SELECT * FROM results;"
+python3 node/node.py --id N1 --port 6001
 ```
-
-## 3. Requisitos
-
-- Python 3.9 o superior.
-- Tkinter (incluido con Python en Windows/macOS; en Linux instalar el
-  paquete del sistema si falta, p. ej. `sudo apt install python3-tk`).
-- No se requieren dependencias externas (solo librería estándar: `socket`,
-  `sqlite3`, `tkinter`, `json`, `threading`).
-
-> **macOS:** el Python del sistema trae un Tk 8.5 obsoleto que, en versiones
-> recientes de macOS, abre la ventana del cliente en negro/vacía hasta que se
-> mueve o redimensiona. Instala un Tk moderno con Homebrew y usa ese
-> intérprete para el cliente:
->
-> ```bash
-> brew install python-tk
-> ```
->
-> Luego corre `client/client.py` con `python3.14` (ver sección 4) en vez de
-> `python3`.
-
-## 4. Cómo ejecutar la demostración completa
-
-Abre una terminal por cada componente (para la evidencia mínima se piden al
-menos 2 servidores y 2 clientes conectados simultáneamente, es decir, 5
-terminales en total).
-
-**Terminal 1 — Middleware:**
 
 ```bash
-python3 middleware/middleware.py --host 0.0.0.0 --port 5001
+python3 node/node.py --id N2 --port 6002 --vecinos 127.0.0.1:6001
 ```
-
-**Terminal 2 — Servidor 1:**
 
 ```bash
-python3 server/server.py --id S1 --host 127.0.0.1 --port 5001
+python3 node/node.py --id N3 --port 6003 --vecinos 127.0.0.1:6001 127.0.0.1:6002
 ```
-
-**Terminal 3 — Servidor 2:**
 
 ```bash
-python3 server/server.py --id S2 --host 127.0.0.1 --port 5001
+python3 node/node.py --id N4 --port 6004 --vecinos 127.0.0.1:6001 127.0.0.1:6002 127.0.0.1:6003
 ```
 
-**Terminal 4 — Cliente 1 (GUI):**
+### 6.2 Las 16 células servidor (una sola terminal)
+
+Una de cada operación por nodo. Quedan en segundo plano y todas imprimen en
+esa misma terminal.
 
 ```bash
-python3.14 client/client.py --id C1 --host 127.0.0.1 --port 5001
+for puerto in 6001 6002 6003 6004; do
+  for servicio in SUM SUB MUL DIV; do
+    python3 server/server.py --servicio $servicio --nodo 127.0.0.1:$puerto &
+  done
+done
 ```
 
-**Terminal 5 — Cliente 2 (GUI):**
+### 6.3 Las 4 células GUI (una terminal por GUI)
 
 ```bash
-python3.14 client/client.py --id C2 --host 127.0.0.1 --port 5001
+python3 client/client.py --nodo 127.0.0.1:6001
 ```
-
-> En Windows/Linux, o si no instalaste `python-tk` en macOS, usa `python3`
-> en lugar de `python3.14`.
-
-Para correr los componentes en máquinas distintas de la misma red, usa la IP
-real de la máquina donde corre el middleware en `--host` (y abre el puerto
-5000 en el firewall si aplica).
-
-### Qué mostrar en el video (según la evidencia mínima pedida)
-
-1. Interfaz gráfica del cliente funcionando (Terminales 4 y 5).
-2. Los 2 clientes y los 2 servidores conectados (revisar los logs del
-   middleware, que imprime cada conexión y desconexión).
-3. Enviar una operación desde un cliente (por ejemplo, Cliente 1: `8 / 2`).
-4. Mostrar en los logs del middleware cómo la solicitud se reenvía a ambos
-   servidores, y cómo ambos resultados se reenvían a ambos clientes.
-5. Mostrar la tabla de resultados actualizándose en **ambos** clientes (no
-   solo en el que envió la solicitud).
-6. Probar las 4 operaciones, incluyendo un caso de división entre cero para
-   mostrar el manejo de errores.
-7. Abrir (con `sqlite3` o un visor de SQLite) las bases de datos del cliente
-   y de un servidor para evidenciar la persistencia.
-
-## 5. Prueba automatizada (sin GUI)
-
-`tests/test_e2e.py` levanta el middleware, 2 servidores y 2 clientes
-simulados (sockets crudos) para validar automáticamente el flujo completo,
-el manejo de división entre cero y la persistencia en SQLite:
 
 ```bash
-python tests/test_e2e.py
+python3 client/client.py --nodo 127.0.0.1:6002
 ```
 
-## 6. Estructura del proyecto
+```bash
+python3 client/client.py --nodo 127.0.0.1:6003
+```
+
+```bash
+python3 client/client.py --nodo 127.0.0.1:6004
+```
+
+En cada ventana se escriben los dos operandos, se elige la operación y se da
+clic en "Enviar operación".
+
+### 6.4 Para apagar todo
+
+- Nodos y GUI: `Ctrl+C` en su terminal, o cerrar la ventana de la GUI.
+- Células servidor: se cierran solas al apagar los nodos. Para cerrarlas
+  antes: `pkill -f server/server.py`.
+- Si un nodo dice que el puerto ya está en uso, quedó uno corriendo de
+  antes: cerrarlo con `pkill -f node/node.py` y volver a empezar.
+
+El recorrido de los mensajes se observa en la consola de cada nodo y de
+cada célula servidor, y en la bitácora de cada GUI.
+
+## 7. Estructura del proyecto
 
 ```
-calculadora_distribuida/
 ├── common/
-│   ├── __init__.py
-│   └── protocol.py       # Mensajes JSON, framing por sockets, cálculo de operaciones
-├── middleware/
-│   └── middleware.py      # Enrutamiento/broadcast, sin lógica de negocio
+│   └── protocol.py    # Mensajes JSON, Códigos de Contenido, cálculo de operaciones
+├── node/
+│   └── node.py        # Nodo del Campo de Datos (malla y broadcast)
 ├── server/
-│   └── server.py          # Lógica de negocio + persistencia SQLite (server_<id>.db)
+│   └── server.py      # Célula servidor (SUM, SUB, MUL o DIV)
 ├── client/
-│   └── client.py          # GUI Tkinter + persistencia SQLite (client_<id>.db)
-├── tests/
-│   └── test_e2e.py        # Prueba automatizada del flujo completo
+│   └── client.py      # Célula cliente GUI (Tkinter)
 └── README.md
 ```
-
-## 7. Separación de responsabilidades
-
-- El **cliente** solo construye y envía solicitudes, y muestra/persiste lo
-  que recibe; nunca calcula el resultado.
-- El **middleware** solo enruta y distribuye mensajes según el rol del
-  emisor; nunca calcula ni persiste resultados.
-- El **servidor** solo calcula operaciones y persiste sus propios
-  resultados; no conoce a los clientes ni administra otras conexiones.
-
-## 8. Pendiente para la entrega
-
-Este repositorio cubre el código fuente y su prueba automatizada. Aún faltan
-los otros dos entregables obligatorios del proyecto:
-
-- **Reporte técnico** (arquitectura, componentes, flujo de comunicación,
-  decisiones de diseño y persistencia).
-- **Video con audio** demostrando la ejecución real (ver sección 4).
-- **Liga al código fuente** (subir este proyecto a un repositorio, p. ej.
-  GitHub, y compartir el enlace).
